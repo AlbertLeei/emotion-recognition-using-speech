@@ -90,7 +90,7 @@ class DeepEmotionRecognizer(EmotionRecognizer):
 
         # training attributes
         self.batch_size = kwargs.get("batch_size", 64)
-        self.epochs = kwargs.get("epochs", 500)
+        self.epochs = kwargs.get("epochs", 100)
         
         # the name of the model
         self.model_name = ""
@@ -248,21 +248,25 @@ class DeepEmotionRecognizer(EmotionRecognizer):
         if not os.path.isdir("logs"):
             os.mkdir("logs")
 
+        print('1')
         model_filename = self._get_model_filename()
+        print(model_filename)
+        print('2')
+        #self.checkpointer = ModelCheckpoint(model_filename, save_best_only=True, verbose=1)
+        print('3')
+        #self.tensorboard = TensorBoard(log_dir=os.path.join("logs", self.model_name))
 
-        self.checkpointer = ModelCheckpoint(model_filename, save_best_only=True, verbose=1)
-        self.tensorboard = TensorBoard(log_dir=os.path.join("logs", self.model_name))
-
+        print("begin training")
         self.history = self.model.fit(self.X_train, self.y_train,
                         batch_size=self.batch_size,
                         epochs=self.epochs,
                         validation_data=(self.X_test, self.y_test),
-                        callbacks=[self.checkpointer, self.tensorboard],
+                        #callbacks=[self.checkpointer, self.tensorboard],
                         verbose=self.verbose)
+        print("end training")
         
         self.model_trained = True
-        if self.verbose > 0:
-            print("[+] Model trained")
+        print("[+] Model trained")
 
     def predict(self, audio_path):
         feature = extract_feature(audio_path, **self.audio_config).reshape((1, 1, self.input_length))

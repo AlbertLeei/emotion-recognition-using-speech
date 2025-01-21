@@ -2,31 +2,18 @@ from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import Conv1D, MaxPool1D, GlobalAveragePooling1D, Dense, Dropout
 import os
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Only show errors
+#os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Only show errors
 from utils import AVAILABLE_EMOTIONS
 
-from emotion_recognition import EmotionRecognizer
-from sklearn.svm import SVC
-# init a model, let's use SVC
-my_model = SVC()
-# pass my model to EmotionRecognizer instance
-# and balance the dataset
-# ['sad', 'neutral', 'happy']
-rec = EmotionRecognizer(model=my_model, emotions=AVAILABLE_EMOTIONS, balance=True, verbose=0)
-
-# loads the best estimators from `grid` folder that was searched by GridSearchCV in `grid_search.py`,
-# and set the model to the best in terms of test score, and then train it
-rec.determine_best_model()
-# get the determined sklearn model name
-print(rec.model.__class__.__name__, "is the best")
-# get the test accuracy score for the best estimator
-print("Test score:", rec.test_score())
-
-
-
+from deep_emotion_recognition import DeepEmotionRecognizer
+# initialize instance
+# inherited from emotion_recognition.EmotionRecognizer
+# default parameters (LSTM: 128x2, Dense:128x2)
+deeprec = DeepEmotionRecognizer(emotions=['angry', 'sad', 'neutral', 'happy', 'fear', 'disgust', 'boredom'], n_rnn_layers=2, n_dense_layers=2, rnn_units=128, dense_units=128)
 # train the model
-# rec.train()
-# # check the test accuracy for that model
-# print("Test score:", rec.test_score())
-# # check the train accuracy for that model
-# print("Train score:", rec.train_score())
+deeprec.train()
+# get the accuracy
+print(deeprec.test_score())
+# predict angry audio sample
+prediction = deeprec.predict('data/validation/Actor_10/03-02-05-02-02-02-10_angry.wav')
+print(f"Prediction: {prediction}")
