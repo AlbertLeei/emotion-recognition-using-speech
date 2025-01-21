@@ -25,7 +25,7 @@ class AudioExtractor:
             emotions (list): list of emotions to be extracted, default is ['sad', 'neutral', 'happy']
             balance (bool): whether to balance dataset (both training and testing), default is True
         """
-        self.audio_config = audio_config if audio_config else {'mfcc': True, 'chroma': True, 'mel': True, 'contrast': False, 'tonnetz': False}
+        self.audio_config = audio_config if audio_config else {'mfcc': True, 'chroma': False, 'mel': False, 'contrast': False, 'tonnetz': False}
         self.verbose = verbose
         self.features_folder_name = features_folder_name
         self.classification = classification

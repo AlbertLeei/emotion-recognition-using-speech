@@ -48,7 +48,7 @@ class EmotionRecognizer:
         # make sure that there are only available emotions
         self._verify_emotions()
         # audio config
-        self.features = kwargs.get("features", ["mfcc", "chroma", "mel"])
+        self.features = kwargs.get("features", ["mfcc"])
         self.audio_config = get_audio_config(self.features)
         # datasets
         self.tess_ravdess = kwargs.get("tess_ravdess", True)
