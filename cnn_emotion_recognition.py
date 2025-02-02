@@ -5,11 +5,12 @@ stderr = sys.stderr
 sys.stderr = open(os.devnull, 'w')
 import tensorflow as tf
 
+from emotion_recognition import EmotionRecognizer
+from tensorflow.keras.layers import Conv1D, MaxPool1D, GlobalAveragePooling1D, Dense, Dropout
+from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.layers import LSTM, GRU, Dense, Activation, LeakyReLU, Dropout
-from tensorflow.keras.layers import Conv1D, MaxPool1D, GlobalAveragePooling1D
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.callbacks import ModelCheckpoint, TensorBoard
-from tensorflow.keras.utils import to_categorical
 
 from sklearn.metrics import accuracy_score, mean_absolute_error, confusion_matrix
 
@@ -18,105 +19,109 @@ from create_csv import write_custom_csv, write_emodb_csv, write_tess_ravdess_csv
 from emotion_recognition import EmotionRecognizer
 from utils import get_first_letters, AVAILABLE_EMOTIONS, extract_feature, get_dropout_str
 
+
 import numpy as np
 import pandas as pd
 import random
 
-
-class DeepEmotionRecognizer(EmotionRecognizer):
+class CNNEmotionRecognizer(EmotionRecognizer):
     """
     The Deep Learning version of the Emotion Recognizer.
-    This class uses RNN (LSTM, GRU, etc.) and Dense layers.
+    This version will use a Convolutional Neural Network (CNN) instead of an RNN.
     """
     def __init__(self, **kwargs):
         """
-        params:
-            emotions (list): list of emotions to be used. Note that these emotions must be available in
-                RAVDESS_TESS & EMODB Datasets, available nine emotions are the following:
-                    'neutral', 'calm', 'happy', 'sad', 'angry', 'fear', 'disgust', 'ps' ( pleasant surprised ), 'boredom'.
-                Default is ["sad", "neutral", "happy"].
-            tess_ravdess (bool): whether to use TESS & RAVDESS Speech datasets, default is True.
-            emodb (bool): whether to use EMO-DB Speech dataset, default is True.
-            custom_db (bool): whether to use custom Speech dataset that is located in `data/train-custom`
-                and `data/test-custom`, default is True.
-            tess_ravdess_name (str): the name of the output CSV file for TESS&RAVDESS dataset, default is "tess_ravdess.csv".
-            emodb_name (str): the name of the output CSV file for EMO-DB dataset, default is "emodb.csv".
-            custom_db_name (str): the name of the output CSV file for the custom dataset, default is "custom.csv".
-            features (list): list of speech features to use, default is ["mfcc", "chroma", "mel"]
-                (i.e MFCC, Chroma and MEL spectrogram ).
-            classification (bool): whether to use classification or regression, default is True.
-            balance (bool): whether to balance the dataset ( both training and testing ), default is True.
-            verbose (bool/int): whether to print messages on certain tasks.
+        params (CNN-specific):
+            emotions (list): list of emotions to be used.
+            ...
             ==========================================================
             Model params
-            n_rnn_layers (int): number of RNN layers, default is 2.
-            cell (keras.layers.RNN instance): RNN cell used to train the model, default is LSTM.
-            rnn_units (int): number of units of `cell`, default is 128.
+            n_conv_layers (int): number of convolutional layers, default is 2.
+            cnn_filters (int): number of filters for each convolutional layer, default is 64.
+            kernel_size (int): kernel size for convolutional layers, default is 3.
             n_dense_layers (int): number of Dense layers, default is 2.
-            dense_units (int): number of units of the Dense layers, default is 128.
-            dropout (list/float): dropout rate,
-                - if list, it indicates the dropout rate of each layer.
-                - if float, it indicates the dropout rate for all layers.
-                Default is 0.3.
+            dense_units (int): number of units in the Dense layers, default is 128.
+            dropout (list/float): dropout rate(s); if a float, the same dropout is applied to all layers.
             ==========================================================
             Training params
             batch_size (int): number of samples per gradient update, default is 64.
             epochs (int): number of epochs, default is 100.
             optimizer (str/keras.optimizers.Optimizer instance): optimizer used to train, default is "adam".
-            loss (str/callback from keras.losses): loss function that is used to minimize during training,
-                default is "categorical_crossentropy" for classification and "mean_squared_error" for 
-                regression.
+            loss (str/keras.losses.Loss instance): loss function to be minimized during training.
         """
-        # init EmotionRecognizer
+        # initialize base class
         super().__init__(**kwargs)
 
-        self.n_rnn_layers = kwargs.get("n_rnn_layers", 2)
+        # CNN-specific parameters:
+        self.n_conv_layers = kwargs.get("n_conv_layers", 2)
+        self.cnn_filters = kwargs.get("cnn_filters", 64)
+        self.kernel_size = kwargs.get("kernel_size", 3)
         self.n_dense_layers = kwargs.get("n_dense_layers", 2)
-        self.rnn_units = kwargs.get("rnn_units", 128)
         self.dense_units = kwargs.get("dense_units", 128)
-        self.cell = kwargs.get("cell", LSTM)
-
-        # list of dropouts of each layer
-        # must be len(dropouts) = n_rnn_layers + n_dense_layers
+        
+        # Dropout: one value for each conv and dense layer (total layers = n_conv_layers + n_dense_layers)
         self.dropout = kwargs.get("dropout", 0.3)
-        self.dropout = self.dropout if isinstance(self.dropout, list) else [self.dropout] * ( self.n_rnn_layers + self.n_dense_layers )
-        # number of classes ( emotions )
+        if not isinstance(self.dropout, list):
+            self.dropout = [self.dropout] * (self.n_conv_layers + self.n_dense_layers)
+        
+        # Number of output classes (emotions)
         self.output_dim = len(self.emotions)
 
-        # optimization attributes
+        # Optimization parameters
         self.optimizer = kwargs.get("optimizer", "adam")
         self.loss = kwargs.get("loss", "categorical_crossentropy")
-
-        # training attributes
+        
+        # Training parameters
         self.batch_size = kwargs.get("batch_size", 64)
         self.epochs = kwargs.get("epochs", 100)
-        
-        # the name of the model
+
+        # Set a model name based on parameters (for saving purposes)
         self.model_name = ""
         self._update_model_name()
 
-        # init the model
+        # Placeholder for the model itself
         self.model = None
 
-        # compute the input length
+        # Compute input length (used to build the model)
         self._compute_input_length()
 
-        # boolean attributes
+        # Flag to check if the model has been created
         self.model_created = False
 
     def _update_model_name(self):
         """
-        Generates a unique model name based on parameters passed and put it on `self.model_name`.
-        This is used when saving the model.
+        Generates a unique model name based on parameters.
+        For the CNN version, the model name reflects that it uses convolutional layers.
         """
-        # get first letters of emotions, for instance:
-        # ["sad", "neutral", "happy"] => 'HNS' (sorted alphabetically)
+        # e.g. "angry-happy-sad" could become "AHS"
         emotions_str = get_first_letters(self.emotions)
-        # 'c' for classification & 'r' for regression
+        # 'c' for classification, 'r' for regression
         problem_type = 'c' if self.classification else 'r'
-        dropout_str = get_dropout_str(self.dropout, n_layers=self.n_dense_layers + self.n_rnn_layers)
-        self.model_name = f"{emotions_str}-{problem_type}-{self.cell.__name__}-layers-{self.n_rnn_layers}-{self.n_dense_layers}-units-{self.rnn_units}-{self.dense_units}-dropout-{dropout_str}.h5"
+        # build dropout string from the list
+        dropout_str = get_dropout_str(self.dropout, n_layers=self.n_conv_layers + self.n_dense_layers)
+        # Construct a name that includes CNN-specific parameters
+        self.model_name = (
+            f"{emotions_str}-{problem_type}-CNN-"
+            f"convLayers-{self.n_conv_layers}-denseLayers-{self.n_dense_layers}-"
+            f"filters-{self.cnn_filters}-denseUnits-{self.dense_units}-"
+            f"kernelSize-{self.kernel_size}-dropout-{dropout_str}.h5"
+        )
 
+    def _compute_input_length(self):
+        """
+        Calculates the input shape (the sequence length) to be used to build the model.
+        """
+        if not self.data_loaded:
+            self.load_data()
+        # Now, each sample is of shape (feature_length, 1)
+        self.input_length = self.X_train[0].shape[0]
+
+
+    def _verify_emotions(self):
+        super()._verify_emotions()
+        self.int2emotions = {i: e for i, e in enumerate(self.emotions)}
+        self.emotions2int = {v: k for k, v in self.int2emotions.items()}
+    
     def _get_model_filename(self):
         """Returns the relative path of this model name"""
         return f"results/{self.model_name}"
@@ -129,96 +134,83 @@ class DeepEmotionRecognizer(EmotionRecognizer):
         filename = self._get_model_filename()
         return filename if os.path.isfile(filename) else None
 
-    def _compute_input_length(self):
-        """
-        Calculates the input shape to be able to construct the model.
-        """
-        if not self.data_loaded:
-            self.load_data()
-        self.input_length = self.X_train[0].shape[1]
-
-    def _verify_emotions(self):
-        super()._verify_emotions()
-        self.int2emotions = {i: e for i, e in enumerate(self.emotions)}
-        self.emotions2int = {v: k for k, v in self.int2emotions.items()}
-
     def create_model(self):
         """
-        Constructs the neural network based on parameters passed.
+        Constructs the CNN-based neural network using parameters passed.
         """
         if self.model_created:
-            # model already created, why call twice
             return
 
         if not self.data_loaded:
-            # if data isn't loaded yet, load it
             self.load_data()
-        
+
         model = Sequential()
 
-        # rnn layers
-        for i in range(self.n_rnn_layers):
+        # Convolutional layers
+        for i in range(self.n_conv_layers):
             if i == 0:
-                # first layer
-                model.add(self.cell(self.rnn_units, return_sequences=True, input_shape=(None, self.input_length)))
-                model.add(Dropout(self.dropout[i]))
+                # First conv layer with input shape defined
+                model.add(Conv1D(filters=self.cnn_filters,
+                                kernel_size=self.kernel_size,
+                                activation="relu",
+                                input_shape=(self.input_length, 1),
+                                padding="same"))
             else:
-                # middle layers
-                model.add(self.cell(self.rnn_units, return_sequences=True))
-                model.add(Dropout(self.dropout[i]))
+                model.add(Conv1D(filters=self.cnn_filters,
+                                kernel_size=self.kernel_size,
+                                activation="relu",
+                                padding="same"))
+            model.add(Dropout(self.dropout[i]))
+            model.add(MaxPool1D(pool_size=2))
 
-        if self.n_rnn_layers == 0:
-            i = 0
+        model.add(GlobalAveragePooling1D())
 
-        # dense layers
         for j in range(self.n_dense_layers):
-            # if n_rnn_layers = 0, only dense
-            if self.n_rnn_layers == 0 and j == 0:
-                model.add(Dense(self.dense_units, input_shape=(None, self.input_length)))
-                model.add(Dropout(self.dropout[i+j]))
-            else:
-                model.add(Dense(self.dense_units))
-                model.add(Dropout(self.dropout[i+j]))
-                
+            model.add(Dense(self.dense_units, activation="relu"))
+            model.add(Dropout(self.dropout[self.n_conv_layers + j]))
+
         if self.classification:
             model.add(Dense(self.output_dim, activation="softmax"))
             model.compile(loss=self.loss, metrics=["accuracy"], optimizer=self.optimizer)
         else:
             model.add(Dense(1, activation="linear"))
             model.compile(loss="mean_squared_error", metrics=["mean_absolute_error"], optimizer=self.optimizer)
-        
+
         self.model = model
         self.model_created = True
         if self.verbose > 0:
             print("[+] Model created")
+
+
 
     def load_data(self):
         """
         Loads and extracts features from the audio files for the db's specified.
         And then reshapes the data.
         """
-        print('~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~')
-        super().load_data()
-        # reshape X's to 3 dims
-        X_train_shape = self.X_train.shape
-        X_test_shape = self.X_test.shape
-        self.X_train = self.X_train.reshape((1, X_train_shape[0], X_train_shape[1]))
-        self.X_test = self.X_test.reshape((1, X_test_shape[0], X_test_shape[1]))
+        super().load_data()  # Load data from the parent class
+
+        # Get original shapes of the training and testing feature arrays.
+        # Expected original shapes: (n_samples, feature_length)
+        X_train_shape = self.X_train.shape  
+        X_test_shape = self.X_test.shape    
+        
+        # NEW: Reshape so that each sample is a sequence of length 'feature_length'
+        # and there is one channel.
+        self.X_train = self.X_train.reshape((X_train_shape[0], X_train_shape[1], 1))
+        self.X_test = self.X_test.reshape((X_test_shape[0], X_test_shape[1], 1))
 
         if self.classification:
-            # one-hot encode when its classification
-            self.y_train = to_categorical([ self.emotions2int[str(e)] for e in self.y_train ])
-            self.y_test = to_categorical([ self.emotions2int[str(e)] for e in self.y_test ])
-        
-        # reshape labels
-        y_train_shape = self.y_train.shape
-        y_test_shape = self.y_test.shape
-        if self.classification:
-            self.y_train = self.y_train.reshape((1, y_train_shape[0], y_train_shape[1]))    
-            self.y_test = self.y_test.reshape((1, y_test_shape[0], y_test_shape[1]))
+            # One-hot encode labels for classification.
+            # The resulting shape will be (n_samples, num_classes)
+            self.y_train = to_categorical([self.emotions2int[str(e)] for e in self.y_train])
+            self.y_test = to_categorical([self.emotions2int[str(e)] for e in self.y_test])
         else:
-            self.y_train = self.y_train.reshape((1, y_train_shape[0], 1))
-            self.y_test = self.y_test.reshape((1, y_test_shape[0], 1))
+            self.y_train = self.y_train.reshape((-1, 1))
+            self.y_test = self.y_test.reshape((-1, 1))
+
+
+
 
     def train(self, override=False):
         """
@@ -234,21 +226,25 @@ class DeepEmotionRecognizer(EmotionRecognizer):
         # if the model already exists and trained, just load the weights and return
         # but if override is True, then just skip loading weights
         if not override:
+
             model_name = self._model_exists()
+
             if model_name:
                 self.model.load_weights(model_name)
                 self.model_trained = True
+
                 if self.verbose > 0:
                     print("[*] Model weights loaded")
                 return
-        
+
+
         if not os.path.isdir("results"):
             os.mkdir("results")
 
         if not os.path.isdir("logs"):
             os.mkdir("logs")
 
-        # print('1')
+
         model_filename = self._get_model_filename()
         print(model_filename)
         # print('2')
@@ -267,6 +263,7 @@ class DeepEmotionRecognizer(EmotionRecognizer):
         
         self.model_trained = True
         print("[+] Model trained")
+
 
     def predict(self, audio_path):
         feature = extract_feature(audio_path, **self.audio_config).reshape((1, 1, self.input_length))
@@ -399,7 +396,7 @@ class DeepEmotionRecognizer(EmotionRecognizer):
 
 
 if __name__ == "__main__":
-    rec = DeepEmotionRecognizer(emotions=['angry', 'sad', 'neutral', 'ps', 'happy'],
-                                epochs=300, verbose=1)
+    rec = CNNEmotionRecognizer(emotions=['angry', 'sad', 'neutral', 'ps', 'happy'])
+
     rec.train(override=False)
     print("Test accuracy score:", rec.test_score() * 100, "%")
